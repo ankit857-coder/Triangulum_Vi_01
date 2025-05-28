@@ -1,4 +1,8 @@
 import time
+import re
+from datetime import datetime
+from functools import wraps
+from typing import List, Dict, Any, Callable, Optional
 from langchain.tools import Tool
 from langchain_community.tools import WikipediaQueryRun
 from langchain_community.utilities import WikipediaAPIWrapper
@@ -6,70 +10,51 @@ from duckduckgo_search import DDGS
 from scholarly import scholarly
 import pandas as pd
 
-# First, let's try to import arxiv and pubmed tools, if not available, we'll skip them
-try:
-    import arxiv
-    has_arxiv = True
-except ImportError:
-    has_arxiv = False
+# Retry decorator for handling transient errors
+def retry_with_backoff(retries=3, backoff_in_seconds=1):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            x = 0
+            while True:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if x == retries:
+                        raise e
+                    sleep = (backoff_in_seconds * 2 ** x)
+                    time.sleep(sleep)
+                    x += 1
+        return wrapper
+    return decorator
 
-try:
-    from Bio import Entrez
-    has_pubmed = True
-except ImportError:
-    has_pubmed = False
+def extract_year_from_text(text: str) -> Optional[str]:
+    """Extract year from text using various patterns"""
+    # Look for years between 2000 and current year
+    current_year = datetime.now().year
+    year_pattern = rf'(20[0-2][0-{str(current_year)[-1]}])'
+    
+    # Try different contexts where years might appear
+    contexts = [
+        r'published in ' + year_pattern,
+        r'Published: ' + year_pattern,
+        r'©' + year_pattern,
+        r'\((' + year_pattern + r')\)',
+        year_pattern  # Just look for the year itself
+    ]
+    
+    for pattern in contexts:
+        match = re.search(pattern, text)
+        if match:
+            year = match.group(1)
+            if 2000 <= int(year) <= current_year:
+                return year
+    return None
 
-# DuckDuckGo Search Tool
-def real_info(query: str, max_results=3) -> str:
-    """
-    Perform a search using DuckDuckGo and format results for real-time data
-    
-    Args:
-        query (str): Search query
-        max_results (int): Maximum number of results to return
-    
-    Returns:
-        str: Formatted search results focusing on current data
-    """
-    try:
-        with DDGS() as ddgs:            # Enhance query for real-time results
-            enhanced_query = f"current {query} live price today"
-            results = list(ddgs.text(
-                keywords=enhanced_query,
-                max_results=max_results,
-                region='wt-wt',
-                safesearch='moderate'
-            ))
-            
-            if not results:
-                return f"No results found for: {query}"
-                
-            output = f"\nLatest data for: {query}\n\n"
-            for i, result in enumerate(results, 1):
-                title = result.get('title', 'No title available')
-                body = result.get('body', result.get('snippet', 'No description available'))
-                
-                # Extract and format the most relevant information
-                output += f"Source {i}:\n"
-                output += f"Title: {title}\n"
-                output += f"Details: {body}\n\n"
-            
-            return output
-    
-    except Exception as e:
-        return f"An error occurred while searching: {str(e)}"
-
-# Google Scholar Tool
+@retry_with_backoff()
 def scholar_search(query: str, max_results=3) -> str:
     """
-    Search Google Scholar for academic papers and citations
-    
-    Args:
-        query (str): Search query
-        max_results (int): Maximum number of results to return
-    
-    Returns:
-        str: Formatted search results from Google Scholar
+    Search Google Scholar with improved metadata extraction
     """
     try:
         search_query = scholarly.search_pubs(query)
@@ -78,14 +63,37 @@ def scholar_search(query: str, max_results=3) -> str:
         for i in range(max_results):
             try:
                 pub = next(search_query)
+                bib = pub.get('bib', {})
+                
+                # Extract year from multiple possible sources
+                year = None
+                if bib.get('year'):
+                    year = bib['year']
+                elif bib.get('pub_year'):
+                    year = bib['pub_year']
+                elif pub.get('year'):
+                    year = pub['year']
+                elif bib.get('abstract'):
+                    year = extract_year_from_text(bib['abstract'])
+                elif bib.get('title'):
+                    year = extract_year_from_text(bib['title'])
+                
+                authors = bib.get('author', [])
+                if isinstance(authors, str):
+                    authors = [authors]
+                
                 results.append({
-                    'title': pub.get('bib', {}).get('title', 'No title'),
-                    'author': pub.get('bib', {}).get('author', 'No author'),
-                    'year': pub.get('bib', {}).get('year', 'No year'),
-                    'citations': pub.get('num_citations', 0)
+                    'title': bib.get('title', 'No title'),
+                    'author': authors,
+                    'year': year or 'Recent',
+                    'citations': pub.get('num_citations', 0),
+                    'abstract': bib.get('abstract', 'No abstract available'),
+                    'venue': bib.get('venue', 'Unknown venue')
                 })
             except StopIteration:
                 break
+            except Exception as e:
+                continue
                 
         if not results:
             return f"No results found for: {query}"
@@ -94,113 +102,97 @@ def scholar_search(query: str, max_results=3) -> str:
         for i, result in enumerate(results, 1):
             output += f"Paper {i}:\n"
             output += f"Title: {result['title']}\n"
-            output += f"Author(s): {result['author']}\n"
+            output += f"Author(s): {', '.join(str(a) for a in result['author'])}\n"
             output += f"Year: {result['year']}\n"
-            output += f"Citations: {result['citations']}\n\n"
+            output += f"Citations: {result['citations']}\n"
+            output += f"Venue: {result['venue']}\n"
+            output += f"Abstract: {result['abstract'][:300]}...\n\n"
             
         return output
-        
     except Exception as e:
-        return f"An error occurred while searching Scholar: {str(e)}"
+        return f"An error occurred while searching Google Scholar: {str(e)}"
 
-# Initialize the base tools list with always-available tools
-tools = []
-
-# Wikipedia Tool
-wiki_tool = Tool(
-    name="Wikipedia",
-    func=WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper()).run,
-    description="Useful for getting general information, historical data, and detailed explanations. Best for non-time-sensitive information.",
-)
-tools.append(wiki_tool)
-
-# DuckDuckGo Tool
-real_time_information = Tool(
-    name="DuckDuckGo",
-    func=real_info,
-    description="Useful for getting real-time data like current prices, market values, latest news, and live updates. Best for time-sensitive information.",
-)
-tools.append(real_time_information)
-
-# Google Scholar Tool
-scholar_tool = Tool(
-    name="GoogleScholar",
-    func=scholar_search,
-    description="Useful for finding academic papers across all disciplines, citation counts, and scholarly impact. Best for academic research.",
-)
-tools.append(scholar_tool)
-
-# ArXiv Tool (only if available)
-if has_arxiv:
-    def arxiv_search(query: str, max_results=3) -> str:
-        """Search arXiv for papers"""
-        try:
-            search = arxiv.Search(
-                query=query,
-                max_results=max_results,
-                sort_by=arxiv.SortCriterion.Relevance
-            )
-            
-            results = list(search.results())
+@retry_with_backoff()
+def real_info(query: str, max_results=3) -> str:
+    """
+    Enhanced DuckDuckGo search with better filtering and formatting
+    """
+    try:
+        with DDGS() as ddgs:
+            enhanced_query = f"latest {query} recent developments"
+            results = list(ddgs.text(
+                keywords=enhanced_query,
+                max_results=max_results * 2,  # Get more results to filter
+                region='wt-wt',
+                safesearch='moderate'
+            ))
             
             if not results:
                 return f"No results found for: {query}"
-                
-            output = f"\nArXiv results for: {query}\n\n"
-            for i, result in enumerate(results, 1):
-                output += f"Paper {i}:\n"
-                output += f"Title: {result.title}\n"
-                output += f"Authors: {', '.join(result.authors)}\n"
-                output += f"Published: {result.published}\n"
-                output += f"Summary: {result.summary[:200]}...\n"
-                output += f"URL: {result.pdf_url}\n\n"
-                
-            return output
             
-        except Exception as e:
-            return f"An error occurred while searching ArXiv: {str(e)}"
+            # Filter and sort results
+            filtered_results = []
+            for result in results:
+                title = result.get('title', '')
+                body = result.get('body', result.get('snippet', ''))
+                
+                # Skip results that don't seem recent or relevant
+                if not any(word in body.lower() for word in ['recent', 'latest', 'new', '2023', '2024', '2025']):
+                    continue
+                    
+                filtered_results.append({
+                    'title': title,
+                    'body': body,
+                    'date': extract_year_from_text(body) or 'Recent'
+                })
+            
+            # Take the top max_results
+            filtered_results = filtered_results[:max_results]
+                
+            output = f"\nLatest developments for: {query}\n\n"
+            for i, result in enumerate(filtered_results, 1):
+                output += f"Source {i}:\n"
+                output += f"Title: {result['title']}\n"
+                output += f"Date: {result['date']}\n"
+                output += f"Details: {result['body']}\n\n"
+            
+            return output
     
-    arxiv_tool = Tool(
-        name="ArXiv",
-        func=arxiv_search,
-        description="Useful for finding scientific papers, especially in physics, mathematics, computer science, and related fields.",
-    )
-    tools.append(arxiv_tool)
+    except Exception as e:
+        return f"An error occurred while searching DuckDuckGo: {str(e)}"
 
-# PubMed Tool (only if available)
-if has_pubmed:
-    def pubmed_search(query: str, max_results=3) -> str:
-        """Search PubMed for papers"""
-        try:
-            Entrez.email = "your-email@example.com"  # Please replace with your email
-            handle = Entrez.esearch(db="pubmed", term=query, retmax=max_results)
-            record = Entrez.read(handle)
-            
-            if not record["IdList"]:
-                return f"No results found for: {query}"
-                
-            output = f"\nPubMed results for: {query}\n\n"
-            for i, paper_id in enumerate(record["IdList"], 1):
-                paper = Entrez.efetch(db="pubmed", id=paper_id, rettype="gb")
-                paper_details = Entrez.read(paper)
-                
-                output += f"Paper {i}:\n"
-                output += f"Title: {paper_details['Title']}\n"
-                output += f"Authors: {', '.join(paper_details.get('Authors', ['No authors listed']))}\n"
-                output += f"Journal: {paper_details.get('Journal', 'No journal listed')}\n"
-                output += f"Abstract: {paper_details.get('Abstract', 'No abstract available')[:200]}...\n\n"
-                
-            return output
-            
-        except Exception as e:
-            return f"An error occurred while searching PubMed: {str(e)}"
-    
-    pubmed_tool = Tool(
-        name="PubMed",
-        func=pubmed_search,
-        description="Useful for finding medical and life sciences research papers.",
+@retry_with_backoff()
+def wiki_search(query: str) -> str:
+    """
+    Enhanced Wikipedia search with better error handling
+    """
+    try:
+        wikipedia = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
+        result = wikipedia.run(query)
+        if not result or len(result.strip()) < 20:  # Very short results are likely errors
+            return f"No relevant Wikipedia results found for: {query}"
+        return result
+    except Exception as e:
+        return f"An error occurred while searching Wikipedia: {str(e)}"
+
+# Define the tools list with improved descriptions
+tools = [
+    Tool(
+        name="DuckDuckGo",
+        func=real_info,
+        description="Use this tool when you need to find current information, news, or recent developments. The tool automatically filters for recent content."
+    ),
+    Tool(
+        name="GoogleScholar",
+        func=scholar_search,
+        description="Use this tool when you need to find academic papers and research. The tool attempts to extract publication years and venue information."
+    ),
+    Tool(
+        name="Wikipedia",
+        func=wiki_search,
+        description="Use this tool when you need to find general knowledge or background information. The tool provides comprehensive article summaries."
     )
-    tools.append(pubmed_tool)
+]
 
 if __name__ == "__main__":
     # Test the tools here if needed
