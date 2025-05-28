@@ -1,0 +1,27 @@
+# Core Dependencies
+langchain==0.3.25
+langchain-google-genai==2.1.4
+langchain-community==0.3.24
+python-dotenv==1.0.1
+
+# Search and Research Tools
+duckduckgo-search==8.0.2
+wikipedia==1.4.0
+scholarly==1.7.11
+arxiv==2.2.0
+biopython==1.85
+
+# Data Processing
+pandas==2.2.3
+numpy>=1.24.0
+
+# Utilities
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Optional Dependencies for Enhanced Functionality
+# Uncomment if needed
+# playwright>=1.39.0  # For enhanced web scraping
+# selenium>=4.18.0    # For automated browsing
+# pypdf2>=3.0.0       # For PDF processing

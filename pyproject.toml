@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=64.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "triangulum-vi-01"
+version = "1.0.0"
+description = "An advanced AI research assistant powered by Google's Gemini model"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Triangulum_Vi_01", email = "a708898ak@gmail.com"}
+]
+requires-python = ">=3.9"
+dependencies = [
+    "langchain==0.3.25",
+    "langchain-google-genai==2.1.4",
+    "langchain-community==0.3.24",
+    "python-dotenv==1.0.1",
+    "duckduckgo-search==8.0.2",
+    "wikipedia==1.4.0",
+    "scholarly==1.7.11",
+    "arxiv==2.2.0",
+    "biopython==1.85",
+    "pandas==2.2.3",
+    "numpy>=1.24.0",
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=4.9.0"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "isort>=5.0",
+    "mypy>=1.0",
+    "flake8>=6.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/ankit857-coder/Triangulum_Vi_01"
+Repository = "https://github.com/ankit857-coder/Triangulum_Vi_01.git"
+Documentation = "https://github.com/ankit857-coder/Triangulum_Vi_01/wiki"
+
+[tool.setuptools]
+packages = ["triangulum"]
+
+[project.scripts]
+triangulum = "triangulum.main:main"
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+
+[tool.mypy]
+python_version = "3.9"
+strict = true
+ignore_missing_imports = true
